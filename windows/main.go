@@ -32,6 +32,7 @@ type app struct {
 	status     *walk.Label
 	toggle     *walk.PushButton
 	autostart  *walk.CheckBox
+	recursive  *walk.CheckBox
 	logView    *walk.TextEdit
 	trayToggle *walk.Action
 }
@@ -66,6 +67,7 @@ func main() {
 				HSpacer{},
 				PushButton{Text: "ファイルを選んで今すぐ消す…", OnClicked: a.scrubChosen},
 			}},
+			CheckBox{AssignTo: &a.recursive, Text: "サブフォルダも見張る", Checked: a.settings.Recursive, OnClicked: a.toggleRecursive},
 			CheckBox{AssignTo: &a.autostart, Text: "ログイン時に自動で見張りを始める", Checked: a.settings.Autostart, OnClicked: a.toggleAutostart},
 			TextEdit{AssignTo: &a.logView, ReadOnly: true, VScroll: true},
 			Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
@@ -156,7 +158,7 @@ func (a *app) start() {
 		close(a.stop)
 	}
 	a.stop = make(chan struct{})
-	go core.Watch(a.settings.Folder, a.log, a.stop)
+	go core.Watch(a.settings.Folder, a.settings.Recursive, a.log, a.stop)
 	a.mu.Unlock()
 	a.setStatus("● 見張り中", "見張りを止める")
 }
@@ -209,6 +211,10 @@ func (a *app) chooseFolder() {
 	if ok, err := dlg.ShowBrowseFolder(a.window); err != nil || !ok {
 		return
 	}
+	if err := core.ValidateFolder(dlg.FilePath); err != nil {
+		walk.MsgBox(a.window, "このフォルダは選べません", err.Error(), walk.MsgBoxIconWarning)
+		return
+	}
 	a.settings.Folder = dlg.FilePath
 	a.save()
 	a.folder.SetText(dlg.FilePath)
@@ -227,6 +233,14 @@ func (a *app) scrubChosen() {
 	}
 	for _, path := range dlg.FilePaths {
 		core.ScrubAndLog(path, a.log)
+	}
+}
+
+func (a *app) toggleRecursive() {
+	a.settings.Recursive = a.recursive.Checked()
+	a.save()
+	if a.watching() {
+		a.start()
 	}
 }
 

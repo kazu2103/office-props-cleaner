@@ -38,14 +38,14 @@ func NextLog() *C.char {
 }
 
 //export StartWatch
-func StartWatch(folder *C.char) {
+func StartWatch(folder *C.char, recursive C.bool) {
 	mu.Lock()
 	defer mu.Unlock()
 	if stop != nil {
 		close(stop)
 	}
 	stop = make(chan struct{})
-	go core.Watch(C.GoString(folder), log, stop)
+	go core.Watch(C.GoString(folder), bool(recursive), log, stop)
 }
 
 //export StopWatch
@@ -74,9 +74,17 @@ func LoadSettingsJSON() *C.char {
 	return C.CString(string(data))
 }
 
+//export ValidateFolder
+func ValidateFolder(folder *C.char) *C.char {
+	if err := core.ValidateFolder(C.GoString(folder)); err != nil {
+		return C.CString(err.Error())
+	}
+	return nil
+}
+
 //export SaveSettings
-func SaveSettings(folder *C.char, autostart C.bool) *C.char {
-	s := core.Settings{Folder: C.GoString(folder), Autostart: bool(autostart)}
+func SaveSettings(folder *C.char, autostart C.bool, recursive C.bool) *C.char {
+	s := core.Settings{Folder: C.GoString(folder), Autostart: bool(autostart), Recursive: bool(recursive)}
 	if err := core.SaveSettings(s); err != nil {
 		return C.CString(err.Error())
 	}

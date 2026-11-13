@@ -9,6 +9,7 @@ import (
 type Settings struct {
 	Folder    string `json:"folder"`
 	Autostart bool   `json:"autostart"`
+	Recursive bool   `json:"recursive"`
 }
 
 func settingsPath() string {

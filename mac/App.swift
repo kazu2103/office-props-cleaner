@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct Settings: Codable {
     var folder: String
     var autostart: Bool
+    var recursive: Bool
 }
 
 func takeString(_ pointer: UnsafeMutablePointer<CChar>?) -> String? {
@@ -15,7 +16,7 @@ func takeString(_ pointer: UnsafeMutablePointer<CChar>?) -> String? {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
-    private var settings = Settings(folder: "", autostart: false)
+    private var settings = Settings(folder: "", autostart: false, recursive: false)
     private var watching = false
     private var recentLogs: [String] = []
 
@@ -41,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startWatching() {
-        settings.folder.withCString { StartWatch(UnsafeMutablePointer(mutating: $0)) }
+        settings.folder.withCString { StartWatch(UnsafeMutablePointer(mutating: $0), settings.recursive) }
         watching = true
         rebuildMenu()
     }
@@ -65,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func saveSettings() {
-        let error = settings.folder.withCString { SaveSettings(UnsafeMutablePointer(mutating: $0), settings.autostart) }
+        let error = settings.folder.withCString { SaveSettings(UnsafeMutablePointer(mutating: $0), settings.autostart, settings.recursive) }
         if let message = takeString(error) {
             recentLogs.insert("設定を保存できません: \(message)", at: 0)
         }
@@ -86,6 +87,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(item("見張るフォルダ: \(settings.folder)", nil, enabled: false))
         menu.addItem(item("フォルダを変更…", #selector(chooseFolder)))
+        let recursive = item("サブフォルダも見張る", #selector(toggleRecursive))
+        recursive.state = settings.recursive ? .on : .off
+        menu.addItem(recursive)
         menu.addItem(item("ファイルを選んで今すぐ消す…", #selector(scrubChosen)))
         let autostart = item("ログイン時に自動で始める", #selector(toggleAutostart))
         autostart.state = settings.autostart ? .on : .off
@@ -110,6 +114,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.directoryURL = URL(fileURLWithPath: settings.folder)
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let message = url.path.withCString({ takeString(ValidateFolder(UnsafeMutablePointer(mutating: $0))) }) {
+            let alert = NSAlert()
+            alert.messageText = "このフォルダは選べません"
+            alert.informativeText = message
+            alert.runModal()
+            return
+        }
         settings.folder = url.path
         saveSettings()
         if watching { startWatching() } else { rebuildMenu() }
@@ -124,6 +135,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in panel.urls {
             url.path.withCString { ScrubPath(UnsafeMutablePointer(mutating: $0)) }
         }
+    }
+
+    @objc private func toggleRecursive() {
+        settings.recursive.toggle()
+        saveSettings()
+        if watching { startWatching() } else { rebuildMenu() }
     }
 
     @objc private func toggleAutostart() {
