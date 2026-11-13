@@ -14,12 +14,14 @@
 
 PyInstaller はビルドした OS 向けのアプリしか作れないので、Mac と Windows でそれぞれビルドする。
 
-```
-uv run --no-project --python 3.13 --with pyinstaller pyinstaller --noconfirm --windowed --name "Officeプロパティ消去" app.py
-```
-
-- Mac: `dist/Officeプロパティ消去.app`
-- Windows: `dist/Officeプロパティ消去/Officeプロパティ消去.exe`（`--onefile` を付けると1ファイルになる）
+- Mac: `./build_mac.sh` → `dist/OfficePropsCleaner.app`
+  - PyInstaller が Tcl/Tk 9 のライブラリを壊すので、スクリプト内で元のファイルに差し替えて署名し直している
+  - アプリ名に日本語を入れると署名の検証が通らないため、英字名にしている
+- Windows（未検証）:
+  ```
+  uv run --no-project --python-preference only-managed --python 3.13 --with pyinstaller pyinstaller --noconfirm --windowed --name OfficePropsCleaner app.py
+  ```
+  → `dist/OfficePropsCleaner/OfficePropsCleaner.exe`。Mac と同じく Tcl/Tk のライブラリが壊れて起動しない場合は、同様の差し替えが要る
 
 署名していないアプリは、初回起動時に Mac では「開発元を確認できない」、Windows では SmartScreen の警告が出る。
 
