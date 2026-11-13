@@ -1,4 +1,6 @@
-build/
 dist/
+build/
+mac/build/
 __pycache__/
 *.spec
+.DS_Store
