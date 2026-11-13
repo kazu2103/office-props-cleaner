@@ -7,8 +7,8 @@ APP="$OUT/OfficePropsCleaner.app"
 rm -rf "$APP" build
 mkdir -p build "$APP/Contents/MacOS"
 
-CGO_ENABLED=1 go build -buildmode=c-archive -o build/libbridge.a ./bridge
-swiftc -O -import-objc-header build/libbridge.h App.swift build/libbridge.a \
+MACOSX_DEPLOYMENT_TARGET=13.0 CGO_CFLAGS="-mmacosx-version-min=13.0" CGO_LDFLAGS="-mmacosx-version-min=13.0" CGO_ENABLED=1 go build -buildmode=c-archive -o build/libbridge.a ./bridge
+swiftc -O -target arm64-apple-macos13.0 -import-objc-header build/libbridge.h App.swift build/libbridge.a \
   -framework AppKit -framework UniformTypeIdentifiers \
   -o "$APP/Contents/MacOS/OfficePropsCleaner"
 
