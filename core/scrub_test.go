@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func readEntry(t *testing.T, path, name string) string {
@@ -43,6 +44,9 @@ func TestScrubFile(t *testing.T) {
 	w.Close()
 	out.Close()
 
+	modTime := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	os.Chtimes(path, modTime, modTime)
+
 	changed, err := ScrubFile(path)
 	if err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
@@ -56,6 +60,9 @@ func TestScrubFile(t *testing.T) {
 	}
 	if got := readEntry(t, path, "xl/worksheets/sheet1.xml"); got != "<worksheet>本文の他社</worksheet>" {
 		t.Errorf("本文が変わった: %s", got)
+	}
+	if info, _ := os.Stat(path); !info.ModTime().Equal(modTime) {
+		t.Errorf("更新日時が変わった: %v", info.ModTime())
 	}
 	if changed, _ := ScrubFile(path); changed {
 		t.Error("2回目は書き換えないはず")

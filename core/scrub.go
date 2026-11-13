@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var targetSuffixes = map[string]bool{
@@ -50,67 +51,71 @@ func scrubPart(name string, data []byte) []byte {
 }
 
 // ScrubFile は消すものがあったときだけファイルを書き換え、書き換えたかどうかを返す。
+// 別ファイルと入れ替えると作成日時や「インターネットから取得した」目印（Mark of the Web / quarantine）が
+// 失われ、Office の保護ビューが効かなくなるため、元のファイルをその場で書き換えて更新日時も戻す。
 func ScrubFile(path string) (bool, error) {
-	src, err := zip.OpenReader(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		return false, err
 	}
-	defer src.Close()
-
-	type entry struct {
-		header *zip.FileHeader
-		data   []byte
+	original, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
 	}
-	var entries []entry
+	scrubbed, changed, err := scrubZip(original)
+	if err != nil || !changed {
+		return false, err
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return false, err
+	}
+	if _, err := f.Write(scrubbed); err != nil {
+		f.Truncate(0)
+		f.WriteAt(original, 0)
+		f.Close()
+		return false, err
+	}
+	if err := f.Close(); err != nil {
+		return false, err
+	}
+	return true, os.Chtimes(path, time.Now(), info.ModTime())
+}
+
+func scrubZip(original []byte) ([]byte, bool, error) {
+	src, err := zip.NewReader(bytes.NewReader(original), int64(len(original)))
+	if err != nil {
+		return nil, false, err
+	}
+	var out bytes.Buffer
+	w := zip.NewWriter(&out)
 	changed := false
 	for _, f := range src.File {
 		rc, err := f.Open()
 		if err != nil {
-			return false, err
+			return nil, false, err
 		}
 		data, err := io.ReadAll(rc)
 		rc.Close()
 		if err != nil {
-			return false, err
+			return nil, false, err
 		}
 		scrubbed := scrubPart(f.Name, data)
 		if !bytes.Equal(scrubbed, data) {
 			changed = true
 		}
 		header := f.FileHeader
-		entries = append(entries, entry{&header, scrubbed})
-	}
-	if !changed {
-		return false, nil
-	}
-
-	tmp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".scrubbing")
-	out, err := os.Create(tmp)
-	if err != nil {
-		return false, err
-	}
-	w := zip.NewWriter(out)
-	for _, e := range entries {
-		h := *e.header
-		fw, err := w.CreateHeader(&h)
-		if err == nil {
-			_, err = fw.Write(e.data)
-		}
+		fw, err := w.CreateHeader(&header)
 		if err != nil {
-			out.Close()
-			os.Remove(tmp)
-			return false, err
+			return nil, false, err
+		}
+		if _, err := fw.Write(scrubbed); err != nil {
+			return nil, false, err
 		}
 	}
 	if err := w.Close(); err != nil {
-		out.Close()
-		os.Remove(tmp)
-		return false, err
+		return nil, false, err
 	}
-	if err := out.Close(); err != nil {
-		os.Remove(tmp)
-		return false, err
-	}
-	src.Close()
-	return true, os.Rename(tmp, path)
+	return out.Bytes(), changed, nil
 }
