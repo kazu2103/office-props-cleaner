@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-const launchAgentLabel = "jp.ascend.office-props-cleaner"
+const launchAgentLabel = "io.github.kazu2103.office-props-cleaner"
 
 func SetAutostart(enabled bool) error {
 	home, err := os.UserHomeDir()
