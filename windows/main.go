@@ -1,181 +1,251 @@
 //go:build windows
 
-// Windows のタスクトレイに常駐する画面。go build -ldflags -H=windowsgui でビルドする。
+// Windows のウィンドウとタスクトレイ。build.sh でマニフェストを埋め込んでからビルドする。
 package main
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
-	"github.com/getlantern/systray"
-	"github.com/sqweek/dialog"
+	"github.com/lxn/walk"
+	. "github.com/lxn/walk/declarative"
+	"github.com/lxn/win"
 
 	"github.com/kazu2103/office-props-cleaner/core"
 )
 
-const recentLogCount = 10
+const title = "Officeプロパティ消去"
 
-type tray struct {
-	mu        sync.Mutex
-	settings  core.Settings
-	stop      chan struct{}
-	status    *systray.MenuItem
-	toggle    *systray.MenuItem
-	folder    *systray.MenuItem
-	autostart *systray.MenuItem
-	logs      []*systray.MenuItem
-	recent    []string
+type app struct {
+	mu       sync.Mutex
+	settings core.Settings
+	stop     chan struct{}
+	quitting bool
+
+	window     *walk.MainWindow
+	tray       *walk.NotifyIcon
+	folder     *walk.Label
+	status     *walk.Label
+	toggle     *walk.PushButton
+	autostart  *walk.CheckBox
+	logView    *walk.TextEdit
+	trayToggle *walk.Action
 }
 
 func main() {
-	systray.Run(onReady, func() {})
-}
-
-func onReady() {
-	t := &tray{settings: core.LoadSettings()}
-	systray.SetIcon(icon)
-	systray.SetTooltip("Officeプロパティ消去")
-
-	t.status = systray.AddMenuItem("", "")
-	t.status.Disable()
-	t.toggle = systray.AddMenuItem("", "")
-	systray.AddSeparator()
-	t.folder = systray.AddMenuItem("", "")
-	t.folder.Disable()
-	chooseFolder := systray.AddMenuItem("フォルダを変更…", "")
-	scrubChosen := systray.AddMenuItem("ファイルを選んで今すぐ消す…", "")
-	t.autostart = systray.AddMenuItemCheckbox("ログイン時に自動で始める", "", t.settings.Autostart)
-	systray.AddSeparator()
-	header := systray.AddMenuItem("最近の処理", "")
-	header.Disable()
-	for i := 0; i < recentLogCount; i++ {
-		item := systray.AddMenuItem("", "")
-		item.Disable()
-		item.Hide()
-		t.logs = append(t.logs, item)
+	watchOnLaunch := slices.Contains(os.Args[1:], core.WatchOnLaunchArg)
+	if !acquireSingleInstance() {
+		if !watchOnLaunch {
+			focusRunningInstance()
+		}
+		return
 	}
-	systray.AddSeparator()
-	quit := systray.AddMenuItem("終了", "")
+	a := &app{settings: core.LoadSettings()}
 
-	t.refreshFolder()
-	if slices.Contains(os.Args[1:], core.WatchOnLaunchArg) {
-		t.start()
+	if err := (MainWindow{
+		AssignTo: &a.window,
+		Title:    title,
+		MinSize:  Size{Width: 520, Height: 360},
+		Size:     Size{Width: 600, Height: 420},
+		Visible:  !watchOnLaunch,
+		Layout:   VBox{},
+		Children: []Widget{
+			Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
+				Label{Text: "見張るフォルダ:"},
+				Label{AssignTo: &a.folder, Text: a.settings.Folder},
+				HSpacer{},
+				PushButton{Text: "変更…", OnClicked: a.chooseFolder},
+			}},
+			Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
+				PushButton{AssignTo: &a.toggle, OnClicked: a.toggleWatching},
+				Label{AssignTo: &a.status},
+				HSpacer{},
+				PushButton{Text: "ファイルを選んで今すぐ消す…", OnClicked: a.scrubChosen},
+			}},
+			CheckBox{AssignTo: &a.autostart, Text: "ログイン時に自動で見張りを始める", Checked: a.settings.Autostart, OnClicked: a.toggleAutostart},
+			TextEdit{AssignTo: &a.logView, ReadOnly: true, VScroll: true},
+			Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
+				Label{Text: "ウィンドウを閉じても、タスクトレイで動き続けます"},
+				HSpacer{},
+				PushButton{Text: "終了", OnClicked: a.quit},
+			}},
+		},
+	}).Create(); err != nil {
+		walk.MsgBox(nil, title, err.Error(), walk.MsgBoxIconError)
+		return
+	}
+
+	a.window.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
+		if !a.quitting {
+			*canceled = true
+			a.window.Hide()
+		}
+	})
+	if err := a.setupTray(); err != nil {
+		a.log("タスクトレイのアイコンを出せません: " + err.Error())
+	}
+
+	if watchOnLaunch {
+		a.start()
 	} else {
-		t.halt()
+		a.showStopped()
 	}
-
-	go func() {
-		for {
-			select {
-			case <-t.toggle.ClickedCh:
-				if t.watching() {
-					t.halt()
-				} else {
-					t.start()
-				}
-			case <-chooseFolder.ClickedCh:
-				t.chooseFolder()
-			case <-scrubChosen.ClickedCh:
-				t.scrubChosen()
-			case <-t.autostart.ClickedCh:
-				t.toggleAutostart()
-			case <-quit.ClickedCh:
-				t.halt()
-				systray.Quit()
-				return
-			}
-		}
-	}()
+	a.window.Run()
 }
 
-func (t *tray) watching() bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.stop != nil
-}
-
-func (t *tray) start() {
-	t.mu.Lock()
-	if t.stop != nil {
-		close(t.stop)
-	}
-	t.stop = make(chan struct{})
-	go core.Watch(t.settings.Folder, t.log, t.stop)
-	t.mu.Unlock()
-	t.status.SetTitle("● 見張り中")
-	t.toggle.SetTitle("見張りを止める")
-}
-
-func (t *tray) halt() {
-	t.mu.Lock()
-	if t.stop != nil {
-		close(t.stop)
-		t.stop = nil
-	}
-	t.mu.Unlock()
-	t.status.SetTitle("○ 停止中")
-	t.toggle.SetTitle("見張りを始める")
-}
-
-func (t *tray) log(message string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.recent = append([]string{message}, t.recent...)
-	if len(t.recent) > recentLogCount {
-		t.recent = t.recent[:recentLogCount]
-	}
-	for i, item := range t.logs {
-		if i < len(t.recent) {
-			item.SetTitle(t.recent[i])
-			item.Show()
-		}
-	}
-}
-
-func (t *tray) refreshFolder() {
-	t.folder.SetTitle("見張るフォルダ: " + t.settings.Folder)
-}
-
-func (t *tray) save() {
-	if err := core.SaveSettings(t.settings); err != nil {
-		t.log("設定を保存できません: " + err.Error())
-	}
-}
-
-func (t *tray) chooseFolder() {
-	folder, err := dialog.Directory().SetStartDir(t.settings.Folder).Title("見張るフォルダを選ぶ").Browse()
+func (a *app) setupTray() error {
+	icon, err := loadIcon()
 	if err != nil {
+		return err
+	}
+	a.window.SetIcon(icon)
+	a.tray, err = walk.NewNotifyIcon(a.window)
+	if err != nil {
+		return err
+	}
+	a.tray.SetIcon(icon)
+	a.tray.SetToolTip(title)
+	a.tray.MouseDown().Attach(func(_, _ int, button walk.MouseButton) {
+		if button == walk.LeftButton {
+			a.showWindow()
+		}
+	})
+	menu := a.tray.ContextMenu().Actions()
+	open := walk.NewAction()
+	open.SetText("ウィンドウを開く")
+	open.Triggered().Attach(a.showWindow)
+	a.trayToggle = walk.NewAction()
+	a.trayToggle.Triggered().Attach(a.toggleWatching)
+	quit := walk.NewAction()
+	quit.SetText("終了")
+	quit.Triggered().Attach(a.quit)
+	for _, action := range []*walk.Action{open, a.trayToggle, walk.NewSeparatorAction(), quit} {
+		menu.Add(action)
+	}
+	return a.tray.SetVisible(true)
+}
+
+// walk はアイコンをファイルかリソースからしか読めないため、埋め込んだ ico を一時ファイルに書き出して読む
+func loadIcon() (*walk.Icon, error) {
+	path := filepath.Join(os.TempDir(), "office-props-cleaner.ico")
+	if err := os.WriteFile(path, iconBytes, 0o644); err != nil {
+		return nil, err
+	}
+	return walk.NewIconFromFile(path)
+}
+
+func (a *app) showWindow() {
+	a.window.Show()
+	win.ShowWindow(a.window.Handle(), win.SW_RESTORE)
+	win.SetForegroundWindow(a.window.Handle())
+}
+
+func (a *app) watching() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stop != nil
+}
+
+func (a *app) start() {
+	a.mu.Lock()
+	if a.stop != nil {
+		close(a.stop)
+	}
+	a.stop = make(chan struct{})
+	go core.Watch(a.settings.Folder, a.log, a.stop)
+	a.mu.Unlock()
+	a.setStatus("● 見張り中", "見張りを止める")
+}
+
+func (a *app) halt() {
+	a.mu.Lock()
+	if a.stop != nil {
+		close(a.stop)
+		a.stop = nil
+	}
+	a.mu.Unlock()
+	a.showStopped()
+}
+
+func (a *app) showStopped() {
+	a.setStatus("○ 停止中", "見張りを始める")
+}
+
+func (a *app) setStatus(status, toggle string) {
+	a.status.SetText(status)
+	a.toggle.SetText(toggle)
+	if a.trayToggle != nil {
+		a.trayToggle.SetText(toggle)
+	}
+}
+
+func (a *app) toggleWatching() {
+	if a.watching() {
+		a.halt()
+	} else {
+		a.start()
+	}
+}
+
+// 見張りは別の goroutine から呼ぶので、画面の更新はウィンドウのスレッドに渡す
+func (a *app) log(message string) {
+	a.window.Synchronize(func() {
+		a.logView.AppendText(strings.TrimSpace(message) + "\r\n")
+	})
+}
+
+func (a *app) save() {
+	if err := core.SaveSettings(a.settings); err != nil {
+		a.log("設定を保存できません: " + err.Error())
+	}
+}
+
+func (a *app) chooseFolder() {
+	dlg := walk.FileDialog{Title: "見張るフォルダを選ぶ", InitialDirPath: a.settings.Folder}
+	if ok, err := dlg.ShowBrowseFolder(a.window); err != nil || !ok {
 		return
 	}
-	t.settings.Folder = folder
-	t.save()
-	t.refreshFolder()
-	if t.watching() {
-		t.start()
+	a.settings.Folder = dlg.FilePath
+	a.save()
+	a.folder.SetText(dlg.FilePath)
+	if a.watching() {
+		a.start()
 	}
 }
 
-func (t *tray) scrubChosen() {
-	path, err := dialog.File().Filter("Office ファイル", "xlsx", "xlsm", "docx", "docm", "pptx", "pptm").Title("プロパティを消すファイルを選ぶ").Load()
-	if err != nil {
+func (a *app) scrubChosen() {
+	dlg := walk.FileDialog{
+		Title:  "プロパティを消すファイルを選ぶ",
+		Filter: "Office ファイル|*.xlsx;*.xlsm;*.docx;*.docm;*.pptx;*.pptm",
+	}
+	if ok, err := dlg.ShowOpenMultiple(a.window); err != nil || !ok {
 		return
 	}
-	core.ScrubAndLog(path, t.log)
+	for _, path := range dlg.FilePaths {
+		core.ScrubAndLog(path, a.log)
+	}
 }
 
-func (t *tray) toggleAutostart() {
-	enabled := !t.settings.Autostart
+func (a *app) toggleAutostart() {
+	enabled := a.autostart.Checked()
 	if err := core.SetAutostart(enabled); err != nil {
-		t.log(fmt.Sprintf("自動起動を設定できません: %v", err))
+		a.log(fmt.Sprintf("自動起動を設定できません: %v", err))
+		a.autostart.SetChecked(!enabled)
 		return
 	}
-	t.settings.Autostart = enabled
-	t.save()
-	if enabled {
-		t.autostart.Check()
-	} else {
-		t.autostart.Uncheck()
+	a.settings.Autostart = enabled
+	a.save()
+}
+
+func (a *app) quit() {
+	a.halt()
+	a.quitting = true
+	if a.tray != nil {
+		a.tray.Dispose()
 	}
+	a.window.Close()
 }

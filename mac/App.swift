@@ -13,13 +13,20 @@ func takeString(_ pointer: UnsafeMutablePointer<CChar>?) -> String? {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private lazy var statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private var settings = Settings(folder: "", autostart: false)
     private var watching = false
     private var recentLogs: [String] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let me = NSRunningApplication.current
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .filter { $0.processIdentifier != me.processIdentifier }
+        if !others.isEmpty {
+            NSApp.terminate(nil)
+            return
+        }
         if let json = takeString(LoadSettingsJSON()), let data = json.data(using: .utf8),
            let loaded = try? JSONDecoder().decode(Settings.self, from: data) {
             settings = loaded
