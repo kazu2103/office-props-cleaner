@@ -24,5 +24,5 @@ func SetAutostart(enabled bool) error {
 	if err != nil {
 		return err
 	}
-	return key.SetStringValue(runValueName, `"`+exe+`"`)
+	return key.SetStringValue(runValueName, `"`+exe+`" `+WatchOnLaunchArg)
 }

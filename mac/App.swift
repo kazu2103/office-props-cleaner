@@ -26,7 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         statusItem.button?.image = NSImage(systemSymbolName: "eraser", accessibilityDescription: "Officeプロパティ消去")
         statusItem.menu = menu
-        startWatching()
+        let launchedForWatching = CommandLine.arguments.dropFirst().contains { arg in
+            arg.withCString { IsWatchOnLaunchArg(UnsafeMutablePointer(mutating: $0)) }
+        }
+        launchedForWatching ? startWatching() : rebuildMenu()
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.drainLogs() }
     }
 

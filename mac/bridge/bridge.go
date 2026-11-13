@@ -63,6 +63,11 @@ func ScrubPath(path *C.char) {
 	core.ScrubAndLog(C.GoString(path), log)
 }
 
+//export IsWatchOnLaunchArg
+func IsWatchOnLaunchArg(arg *C.char) C.bool {
+	return C.bool(C.GoString(arg) == core.WatchOnLaunchArg)
+}
+
 //export LoadSettingsJSON
 func LoadSettingsJSON() *C.char {
 	data, _ := json.Marshal(core.LoadSettings())

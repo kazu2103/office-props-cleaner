@@ -29,10 +29,10 @@ func SetAutostart(enabled bool) error {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>%s</string>
-<key>ProgramArguments</key><array><string>%s</string></array>
+<key>ProgramArguments</key><array><string>%s</string><string>%s</string></array>
 <key>RunAtLoad</key><true/>
 </dict></plist>
-`, launchAgentLabel, html.EscapeString(exe))
+`, launchAgentLabel, html.EscapeString(exe), WatchOnLaunchArg)
 	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
 		return err
 	}

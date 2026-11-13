@@ -5,6 +5,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"slices"
 	"sync"
 
 	"github.com/getlantern/systray"
@@ -58,7 +60,11 @@ func onReady() {
 	quit := systray.AddMenuItem("終了", "")
 
 	t.refreshFolder()
-	t.start()
+	if slices.Contains(os.Args[1:], core.WatchOnLaunchArg) {
+		t.start()
+	} else {
+		t.halt()
+	}
 
 	go func() {
 		for {
